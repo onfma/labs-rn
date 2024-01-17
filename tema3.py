@@ -5,89 +5,98 @@ import numpy as np
 import flappy_bird_gymnasium
 import gymnasium
 
+env = gymnasium.make("FlappyBird-v0", render_mode="human")
+
 class QNetwork(nn.Module):
     def __init__(self, input_size, output_size):
         super(QNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_size, 64)
+        self.fc = nn.Linear(input_size, 128)
         self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(64, 32)
-        self.fc3 = nn.Linear(32, output_size)
+        self.output = nn.Linear(128, output_size)
 
     def forward(self, x):
-        x = self.fc1(x)
+        x = self.fc(x)
         x = self.relu(x)
-        x = self.fc2(x)
-        x = self.relu(x)
-        x = self.fc3(x)
-        return x
+        return self.output(x)
 
-env = gymnasium.make("FlappyBird-v0", render_mode="human")
+class QLearningAgent:
+    def __init__(self, state_size, action_size, gamma=0.99):
+        self.q_network = QNetwork(state_size, action_size)
+        self.target_network = QNetwork(state_size, action_size)
+        self.target_network.load_state_dict(self.q_network.state_dict())
+        self.target_network.eval()
 
-gamma = 0.99  # discount
-epsilon = 0.1  # explorare
+        self.optimizer = optim.Adam(self.q_network.parameters(), lr=0.001)
+        self.loss_fn = nn.MSELoss()
+
+        self.gamma = gamma
+
+    def select_action(self, state):
+        q_values = self.q_network(state)
+        player_position = state[0][9].item()
+        last_top_pipe_position = state[0][1].item()
+        last_bottom_pipe_position = state[0][2].item()
+
+        # if player_position < 0.1: 
+        #     return 0  # NU sari
+        # else:
+        #     if player_position > last_top_pipe_position:
+        #         print("last_top_pipe_position")
+        #         return 1 # sari
+        #     if player_position < last_bottom_pipe_position:
+        #         print("last_bottom_pipe_position")
+        #         return 0  # NU sari
+        return torch.argmax(q_values).item()  # Exploatare
+                
+    def update_q_network(self, state, action, reward, next_state, done):
+        self.optimizer.zero_grad()
+
+        q_values = self.q_network(state)
+        target_q_values = q_values.clone().detach()
+
+        if done:
+            target_q_values[0][action] = reward
+        else:
+            with torch.no_grad():
+                target_q_values[0][action] = reward + self.gamma * torch.max(self.target_network(next_state))
+
+        loss = self.loss_fn(q_values, target_q_values)
+        loss.backward()
+        self.optimizer.step()
+
+    def update_target_network(self):
+        self.target_network.load_state_dict(self.q_network.state_dict())
+
+# Hyperparametri
 state_size = env.observation_space.shape[0]
 action_size = env.action_space.n
+epsilon = 0.1
+episodes = 1000
 
-model = QNetwork(input_size=state_size, output_size=action_size)
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-criterion = nn.MSELoss()
+agent = QLearningAgent(state_size, action_size)
 
-# Funcția Q-learning
-def q_learning_train(model, state, action, reward, next_state, done, scor):
-    state = torch.tensor(state, dtype=torch.float32).view(1, -1)
-    next_state = torch.tensor(next_state, dtype=torch.float32).view(1, -1)
-
-    Q_values = model(state)
-    next_Q_values = model(next_state)
-    print(state)
-
-    # Calcularea target-ului Q
-    target = Q_values.clone().detach()
-    print(target)
-    print(target[0, action])
-    
-    if done:
-        target[0, action] = reward
-    else:
-        if state[0][9] < 0: # pasare in afara ecranului (prea sus) => NU sare
-            target[0, 0] = reward + gamma * next_Q_values[0, 0]
-        else:
-            if next_state[0][9] <= next_state[0][2]: # pasare mai sus de teava de sus => NU sare
-                target[0, 0] = reward + gamma * next_Q_values[0, 0]
-            else:
-                target[0, action] = reward + gamma * torch.max(next_Q_values)
-
-
-    loss = criterion(Q_values, target)
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-
-
-num_episodes = 1000
-
-for episode in range(num_episodes):
+for episode in range(episodes):
     obs, _ = env.reset()
+    state = torch.tensor(obs, dtype=torch.float32).view(1, -1) / 255.0
     total_reward = 0
 
     while True:
-        state = obs
         if np.random.rand() < epsilon:
             action = np.random.choice([0, 1])
         else:
-            Q_values = model(torch.tensor(state, dtype=torch.float32).view(1, -1))
-            action = torch.argmax(Q_values).item()
+            action = agent.select_action(state)
+        next_state, reward, done, _, score = env.step(action)
+        next_state = torch.tensor(next_state, dtype=torch.float32).view(1, -1) /255.0
+        reward = 0.1 if not done else -1.0 if done and total_reward < 1.0 else 1.0
 
-        next_obs, reward, terminated, _, scor = env.step(action)
+        agent.update_q_network(state, action, reward, next_state, done)
 
-        q_learning_train(model, state, action, reward, next_obs, terminated, scor)
-
-        obs = next_obs
         total_reward += reward
+        state = next_state
 
-        if terminated:
+        if done:
+            agent.update_target_network()
+            print(f"Episode: {episode + 1}, Total Reward: {total_reward}, Score: {score}")
             break
-
-    print(f"Episode: {episode + 1}, Total Reward: {total_reward}")
 
 env.close()
