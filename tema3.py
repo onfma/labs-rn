@@ -1,97 +1,100 @@
+import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import gymnasium
 import numpy as np
+import gymnasium
 import flappy_bird_gymnasium
+import matplotlib.pyplot as plt
+
 
 class QNetwork(nn.Module):
     def __init__(self, input_size, output_size):
         super(QNetwork, self).__init__()
-        self.reshape = nn.Flatten()
         self.fc = nn.Linear(input_size, 128)
         self.relu = nn.ReLU()
         self.output = nn.Linear(128, output_size)
 
     def forward(self, x):
-        x = self.reshape(x)
         x = self.fc(x)
         x = self.relu(x)
         return self.output(x)
 
 class QLearningAgent:
-    def __init__(self, state_size, action_size, gamma=0.99, epsilon=1.0, epsilon_decay=0.995, epsilon_min=0.1):
-        self.q_network = QNetwork(state_size, action_size)
-        self.target_network = QNetwork(state_size, action_size)
-        self.target_network.load_state_dict(self.q_network.state_dict())
-        self.target_network.eval()
+    def __init__(self):
+        self.state_size = 12
+        self.action_size = 2
+        self.lr = 1e-4
+        
+        self.gamma = 0.9999
+        self.epsilon = 1.0
+        self.eps_decay = 0.9999
+        self.eps_min = 0.01
+        
+        
+        self.q_network = QNetwork(self.state_size, self.action_size)
+        self.target_q_network = QNetwork(self.state_size, self.action_size)
+        self.target_q_network.load_state_dict(self.q_network.state_dict())
+        self.target_q_network.eval()
+        
+        self.optimizer = optim.Adam(self.q_network.parameters(), lr=self.lr)
+        self.criterion = nn.MSELoss()
 
-        self.optimizer = optim.Adam(self.q_network.parameters(), lr=0.001)
-        self.loss_fn = nn.MSELoss()
-
-        self.gamma = gamma
-        self.epsilon = epsilon
-        self.epsilon_decay = epsilon_decay
-        self.epsilon_min = epsilon_min
-
-    def select_action(self, state):
-        self.epsilon = max(agent.epsilon * agent.epsilon_decay, agent.epsilon_min)
+    def policy(self, state):
+        agent.epsilon = max(agent.epsilon * agent.eps_decay, agent.eps_min)
         if np.random.rand() < self.epsilon:
             # print("random")
-            return np.random.choice([0, 1])
+            return random.choices([0, 1], weights=[90, 10])[0]
         else:
             # print("alg")
-            q_values = self.q_network(state)
+            q_values = self.q_network(torch.FloatTensor(state))
             return torch.argmax(q_values).item()
-                
 
-    def update_q_network(self, state, action, reward, next_state, done):
+    def train(self, state, action, reward, next_state):
+        state_tensor = torch.FloatTensor(state).view(1, -1) / 255.0
+        action_tensor = torch.LongTensor([action])
+        reward_tensor = torch.FloatTensor([reward]).view(1, 1)
+        next_state_tensor = torch.FloatTensor(next_state).view(1, -1) / 255.0
+
+        q_values = self.q_network(state_tensor)
+        next_q_values = self.target_q_network(next_state_tensor).detach()
+        target_q_values = reward_tensor + self.gamma * torch.max(next_q_values, dim=1, keepdim=True).values
+        selected_q_values = torch.gather(q_values, 1, action_tensor.view(-1, 1))
+
+        loss = self.criterion(selected_q_values, target_q_values)
         self.optimizer.zero_grad()
-
-        q_values = self.q_network(state)
-        target_q_values = q_values.clone().detach()
-
-        if done:
-            target_q_values[0][action] = reward
-        else:
-            with torch.no_grad():
-                target_q_values[0][action] = reward + self.gamma * torch.max(self.target_network(next_state))
-
-        loss = self.loss_fn(q_values, target_q_values)
         loss.backward()
         self.optimizer.step()
 
-    def update_target_network(self):
-        self.target_network.load_state_dict(self.q_network.state_dict())
+        return loss.item()
 
-env = gymnasium.make("FlappyBird-v0", render_mode="human")
+if __name__ == "__main__":
+    agent = QLearningAgent()
+    episode_scores = []
 
-state_size = env.observation_space.shape[0]
-action_size = env.action_space.n
-episodes = 1000
+    episodes = 2000
+    for episode in range(episodes):
+        env = gymnasium.make("FlappyBird-v0")
+        env.reset()
+        old_score = 0
+        state = env.step(1)[0]
 
-agent = QLearningAgent(state_size, action_size)
+        max_steps = 10000
+        for _ in range(max_steps):
+            action = agent.policy(state)
+            obs, reward, done, _, info = env.step(action)
+            agent.train(state, action, reward, obs)
+            # env.render()
+            state = obs
 
-for episode in range(episodes):
-    obs, _ = env.reset()
-    state = torch.tensor(obs, dtype=torch.float32).view(1, -1) / 255.0
-    total_reward = 0
+            if done:
+                break
 
-    while True:
-        action = agent.select_action(state)
-        next_state, reward, done, _, score = env.step(action)
-        next_state = torch.tensor(next_state, dtype=torch.float32).view(1, -1) / 255.0
-        reward = 0.1 if not done else -1.0 if done and total_reward < 1.0 else 1.0
+        print("Episode: " + str(episode) + ", Score: " + str(info["score"]) + ", Epsilon: " + str(agent.epsilon))
+        episode_scores.append(info["score"])
 
-        agent.update_q_network(state, action, reward, next_state, done)
-
-        total_reward += reward
-        state = next_state
-
-        if done:
-            agent.update_target_network()
-            agent.epsilon = max(agent.epsilon * agent.epsilon_decay, agent.epsilon_min)
-            print(f"Episode: {episode + 1}, Epsilon: {agent.epsilon}, Total Reward: {total_reward}, Score: {score}")
-            break
-
-env.close()
+    plt.plot(range(episodes), episode_scores, label='Episode Scores')
+    plt.xlabel('Episode')
+    plt.ylabel('Score')
+    plt.legend()
+    plt.show()
