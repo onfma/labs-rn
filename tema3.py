@@ -24,12 +24,12 @@ class QLearningAgent:
     def __init__(self):
         self.state_size = 12
         self.action_size = 2
-        self.lr = 1e-4
+        self.lr = 0.0001
         
         self.gamma = 0.9999
         self.epsilon = 1.0
-        self.eps_decay = 0.9999
-        self.eps_min = 0.01
+        self.eps_decay = 0.999
+        self.eps_min = 0.001
         
         
         self.q_network = QNetwork(self.state_size, self.action_size)
@@ -41,7 +41,7 @@ class QLearningAgent:
         self.criterion = nn.MSELoss()
 
     def policy(self, state):
-        agent.epsilon = max(agent.epsilon * agent.eps_decay, agent.eps_min)
+        # agent.epsilon = max(agent.epsilon * agent.eps_decay, agent.eps_min)
         if np.random.rand() < self.epsilon:
             # print("random")
             return random.choices([0, 1], weights=[90, 10])[0]
@@ -89,7 +89,8 @@ if __name__ == "__main__":
 
             if done:
                 break
-
+        
+        agent.epsilon = max(agent.epsilon * agent.eps_decay, agent.eps_min)
         print("Episode: " + str(episode) + ", Score: " + str(info["score"]) + ", Epsilon: " + str(agent.epsilon))
         episode_scores.append(info["score"])
 
